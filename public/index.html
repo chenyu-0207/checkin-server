@@ -1,0 +1,247 @@
+<!DOCTYPE html>
+<html lang="zh-CN">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>书院活动在线签到系统</title>
+<style>
+* { box-sizing: border-box; margin: 0; padding: 0; }
+body { font-family: "Microsoft YaHei", sans-serif; background: #f4f6f9; color: #333; }
+header { background: #2b5aed; color: #fff; padding: 14px 20px; display: flex; align-items: center; justify-content: space-between; flex-wrap: wrap; gap: 10px; }
+header h1 { font-size: 18px; }
+header span { font-size: 14px; }
+nav button { margin-left: 8px; padding: 6px 14px; border: 1px solid rgba(255,255,255,.6); background: transparent; color: #fff; border-radius: 16px; cursor: pointer; }
+main { max-width: 860px; margin: 20px auto; padding: 0 16px; }
+.card { background: #fff; border-radius: 10px; padding: 16px 20px; margin-bottom: 16px; box-shadow: 0 1px 4px rgba(0,0,0,.08); }
+.card h2 { font-size: 16px; margin-bottom: 12px; color: #2b5aed; }
+.row { display: flex; gap: 10px; flex-wrap: wrap; align-items: center; margin-bottom: 10px; }
+input { padding: 8px 10px; border: 1px solid #ccc; border-radius: 6px; font-size: 14px; }
+button.primary { background: #2b5aed; color: #fff; border: none; padding: 8px 16px; border-radius: 6px; cursor: pointer; }
+button.ghost { background: #fff; color: #2b5aed; border: 1px solid #2b5aed; padding: 7px 14px; border-radius: 6px; cursor: pointer; }
+button.danger { background: #fff; color: #d33; border: 1px solid #d33; padding: 6px 12px; border-radius: 6px; cursor: pointer; }
+button.success { background: #fff; color: #2a2; border: 1px solid #2a2; padding: 7px 14px; border-radius: 6px; cursor: not-allowed; }
+table { width: 100%; border-collapse: collapse; font-size: 14px; }
+th, td { border-bottom: 1px solid #eee; padding: 8px 6px; text-align: left; }
+th { color: #666; font-weight: 500; }
+.tag { display: inline-block; padding: 2px 8px; border-radius: 10px; font-size: 12px; }
+.tag.open { background: #e6f7e6; color: #2a2; }
+.tag.closed { background: #eee; color: #888; }
+.steps { font-size: 13px; color: #666; line-height: 1.8; }
+.group-title { background: #eef2ff; color: #2b5aed; padding: 6px 10px; border-radius: 6px; margin: 10px 0 6px; font-weight: bold; font-size: 14px; }
+</style>
+</head>
+<body>
+<header>
+  <h1>📖 书院活动在线签到系统</h1>
+  <nav id="user-nav"></nav>
+</header>
+<main id="app"><p class="steps" style="padding:20px">加载中…</p></main>
+<script>
+let state = { view: { type: 'list' } };
+let cacheActs = [];
+let loading = false;
+
+function esc(s){ return String(s ?? '').replace(/[&<>"]/g, m => ({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;'}[m])); }
+function fmtTs(ts){ return ts ? new Date(ts).toLocaleString('zh-CN', { hour12: false }) : ''; }
+function val(id){ const e = document.getElementById(id); return e ? e.value.trim() : ''; }
+function getUser(){ try { return JSON.parse(localStorage.getItem('user') || 'null'); } catch(e){ return null; } }
+function clearAuth(){ localStorage.removeItem('token'); localStorage.removeItem('user'); }
+function logout(){ clearAuth(); location.reload(); }
+
+// 统一请求封装：自动带 token，401 时清除登录态
+async function api(path, opts = {}){
+  const res = await fetch(path, {
+    method: opts.method || 'GET',
+    headers: { 'Content-Type': 'application/json',
+      ...(localStorage.getItem('token') ? { Authorization: 'Bearer ' + localStorage.getItem('token') } : {}) },
+    body: opts.body ? JSON.stringify(opts.body) : undefined
+  });
+  if(res.status === 401){ clearAuth(); location.reload(); }
+  const data = await res.json().catch(() => ({}));
+  if(!res.ok) throw new Error(data.error || ('请求失败 ' + res.status));
+  return data;
+}
+
+async function doRegister(){
+  try{
+    const d = await api('/api/auth/register', { method: 'POST',
+      body: { studentId: val('r-id'), name: val('r-name'), college: val('r-college'), password: val('r-pwd') } });
+    localStorage.setItem('token', d.token); localStorage.setItem('user', JSON.stringify(d.user));
+    render();
+  }catch(e){ alert(e.message); }
+}
+async function doLogin(){
+  try{
+    const d = await api('/api/auth/login', { method: 'POST', body: { studentId: val('l-id'), password: val('l-pwd') } });
+    localStorage.setItem('token', d.token); localStorage.setItem('user', JSON.stringify(d.user));
+    state.view = { type: 'list' }; render();
+  }catch(e){ alert(e.message); }
+}
+async function checkin(code){
+  try{ const d = await api('/api/activities/' + code + '/checkin', { method: 'POST' }); alert('✅ 签到成功：' + d.activity); render(); }
+  catch(e){ alert(e.message); }
+}
+async function createAct(){
+  try{
+    await api('/api/activities', { method: 'POST',
+      body: { name: val('act-name'), date: val('act-date'), location: val('act-loc') } });
+    render();
+  }catch(e){ alert(e.message); }
+}
+async function toggleOpen(code){
+  try{ await api('/api/activities/' + code + '/open', { method: 'PATCH', body: {} }); render(); }
+  catch(e){ alert(e.message); }
+}
+async function delAct(code){
+  if(!confirm('确认删除该活动及其所有签到数据？')) return;
+  try{ await api('/api/activities/' + code, { method: 'DELETE' }); state.view = { type: 'list' }; render(); }
+  catch(e){ alert(e.message); }
+}
+async function exportCSV(code){
+  try{
+    const act = cacheActs.find(a => a.code === code);
+    const res = await fetch('/api/activities/' + code + '/export',
+      { headers: { Authorization: 'Bearer ' + localStorage.getItem('token') } });
+    if(!res.ok) throw new Error('导出失败');
+    const blob = await res.blob();
+    const u = URL.createObjectURL(blob);
+    const a = document.createElement('a'); a.href = u;
+    a.download = (act ? act.name : code) + '-签到名单.csv'; a.click();
+    URL.revokeObjectURL(u);
+  }catch(e){ alert(e.message); }
+}
+function openDetail(code){ state.view = { type: 'detail', code: code }; render(); }
+function backList(){ state.view = { type: 'list' }; render(); }
+
+function authView(){
+  return `
+  <div class="card">
+    <h2>📝 学生注册</h2>
+    <div class="row">
+      <input id="r-id" placeholder="学号（登录账号）" style="width:170px">
+      <input id="r-name" placeholder="姓名" style="width:110px">
+      <input id="r-college" list="cl" placeholder="书院" style="width:140px">
+      <datalist id="cl"><option>知行住宿书院</option><option>致远住宿书院</option><option>至善住宿书院</option><option>思齐住宿书院</option><option>博雅住宿书院</option><option>明礼住宿书院</option><option>博艺住宿书院</option><option>寰宇住宿书院</option><option>启贤住宿书院</option><option>新质住宿书院（金水区校区）</option></datalist>
+      <input id="r-pwd" type="password" placeholder="密码（至少6位）" style="width:150px">
+      <button class="primary" onclick="doRegister()">注册并进入</button>
+    </div>
+    <p class="steps">注册后，你的姓名与书院会自动带入每一次签到记录。</p>
+  </div>
+  <div class="card">
+    <h2>🔑 登录</h2>
+    <div class="row">
+      <input id="l-id" placeholder="学号 / 管理员账号" style="width:170px">
+      <input id="l-pwd" type="password" placeholder="密码" style="width:150px">
+      <button class="primary" onclick="doLogin()">登录</button>
+    </div>
+  </div>`;
+}
+
+function studentRow(a){
+  let right;
+  if(a.checked_at) right = '<button class="success">✅ 已签到</button>';
+  else if(a.open) right = '<button class="primary" onclick="checkin(\'' + a.code + '\')">签到</button>';
+  else right = '<span class="tag closed">已结束</span>';
+  return '<div class="row" style="justify-content:space-between;border-bottom:1px solid #eee;padding-bottom:8px">'
+    + '<span><b>' + esc(a.name) + '</b> <span class="tag ' + (a.open ? 'open' : 'closed') + '">' + (a.open ? '进行中' : '已结束') + '</span>'
+    + '<br><span class="steps">' + esc(a.date) + ' ｜ ' + esc(a.location || '待定') + ' ｜ 签到码 ' + esc(a.code)
+    + (a.checked_at ? ' ｜ 签到时间：' + fmtTs(a.checked_at) : '') + '</span></span>' + right + '</div>';
+}
+function studentView(acts){
+  return '<div class="card"><h2>✍️ 活动签到</h2>'
+    + (acts.length ? acts.map(studentRow).join('') : '<p class="steps">暂无活动，有活动时会显示在这里。</p>')
+    + '</div>';
+}
+
+function checkinTable(list){
+  if(!list.length) return '<p class="steps">暂无签到记录，名单会实时更新。</p>';
+  const g = {};
+  list.forEach(r => { (g[r.college] = g[r.college] || []).push(r); });
+  return Object.keys(g).sort().map(c =>
+    '<div class="group-title">' + esc(c) + '（' + g[c].length + ' 人）</div>'
+    + '<table><tr><th>学号</th><th>姓名</th><th>签到时间</th></tr>'
+    + g[c].map(r => '<tr><td>' + esc(r.student_id) + '</td><td>' + esc(r.name) + '</td><td>' + fmtTs(r.checked_at) + '</td></tr>').join('')
+    + '</table>').join('');
+}
+function adminRow(a){
+  return '<tr><td>' + esc(a.name) + '<br><span class="steps">' + esc(a.date) + '</span></td>'
+    + '<td style="font-weight:bold;color:#2b5aed">' + esc(a.code) + '</td>'
+    + '<td><span class="tag ' + (a.open ? 'open' : 'closed') + '">' + (a.open ? '进行中' : '已结束') + '</span></td>'
+    + '<td>' + a.total + ' 人</td>'
+    + '<td><button class="ghost" onclick="openDetail(\'' + a.code + '\')">名单</button> '
+    + '<button class="ghost" onclick="toggleOpen(\'' + a.code + '\')">' + (a.open ? '结束' : '重开') + '</button> '
+    + '<button class="danger" onclick="delAct(\'' + a.code + '\')">删除</button></td></tr>';
+}
+function adminList(acts){
+  return `
+  <div class="card">
+    <h2>① 发起活动</h2>
+    <div class="row">
+      <input id="act-name" placeholder="活动名称" style="flex:1;min-width:200px">
+      <input id="act-date" type="date">
+      <input id="act-loc" placeholder="地点" style="width:140px">
+      <button class="primary" onclick="createAct()">创建活动</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2>② 我的活动</h2>
+    ${acts.length ? '<table><tr><th>活动</th><th>签到码</th><th>状态</th><th>已签到</th><th>操作</th></tr>' + acts.map(adminRow).join('') + '</table>' : '<p class="steps">暂无活动，先创建一个吧。</p>'}
+  </div>`;
+}
+function detailView(act, list){
+  return `
+  <div class="card">
+    <div class="row" style="justify-content:space-between">
+      <h2 style="margin:0">📋 ${esc(act.name)}</h2>
+      <button class="ghost" onclick="backList()">← 返回列表</button>
+    </div>
+    <p class="steps">时间：${esc(act.date)} ｜ 地点：${esc(act.location || '—')} ｜ 签到码：<b>${esc(act.code)}</b> ｜
+      状态：<span class="tag ${act.open ? 'open' : 'closed'}">${act.open ? '进行中' : '已结束'}</span> ｜ 已签到 ${act.total} 人</p>
+    <div class="row" style="margin-top:8px">
+      <button class="primary" onclick="exportCSV('${act.code}')">⬇ 导出签到名单(CSV)</button>
+      <button class="ghost" onclick="toggleOpen('${act.code}')">${act.open ? '结束签到' : '重新开放'}</button>
+      <button class="danger" onclick="delAct('${act.code}')">删除活动</button>
+    </div>
+  </div>
+  <div class="card">
+    <h2>📝 实时签到名单（按书院分组，每 5 秒自动刷新）</h2>
+    ${checkinTable(list)}
+  </div>`;
+}
+
+async function render(){
+  if(loading) return; loading = true;
+  const app = document.getElementById('app');
+  const nav = document.getElementById('user-nav');
+  const user = getUser();
+  nav.innerHTML = user
+    ? '<span>' + esc(user.name) + '（' + (user.role === 'admin' ? '举办方' : esc(user.college)) + '）</span><button onclick="logout()">退出登录</button>'
+    : '';
+  try{
+    if(!user){ app.innerHTML = authView(); return; }
+    const acts = await api('/api/activities');
+    cacheActs = acts;
+    if(user.role === 'admin'){
+      if(state.view.type === 'detail'){
+        const act = acts.find(a => a.code === state.view.code);
+        if(!act){ state.view = { type: 'list' }; app.innerHTML = adminList(acts); return; }
+        const list = await api('/api/activities/' + act.code + '/checkins');
+        app.innerHTML = detailView(act, list);
+      } else {
+        app.innerHTML = adminList(acts);
+      }
+    } else {
+      app.innerHTML = studentView(acts);
+    }
+  }catch(e){
+    app.innerHTML = '<div class="card"><p class="steps">加载失败：' + esc(e.message) + '</p></div>';
+  }finally{
+    loading = false;
+  }
+}
+// 名单页每 5 秒自动刷新
+setInterval(() => { if(state.view.type === 'detail' && getUser()?.role === 'admin') render(); }, 5000);
+render();
+</script>
+</body>
+</html>
